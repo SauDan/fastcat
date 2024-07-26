@@ -5,9 +5,16 @@ import { FastcatStack } from '../lib/fastcat-stack';
 
 const app = new cdk.App();
 const top = new cdk.Stage(app, 'fastcat');
-const stage = new cdk.Stage(top, process.env.STAGE || 'dev');
+const stage_name = process.env.STAGE || 'dev';
+const stage = new cdk.Stage(top, stage_name);
 
-new FastcatStack(stage, 'Stack');
+const env = stage_name == 'dev'? {
+    account: "424075490046",
+    region: "ap-east-1",
+} : undefined;
+
+
+new FastcatStack(stage, 'main', { env });
 
 
 const tags = cdk.Tags.of(stage);

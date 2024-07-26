@@ -1,16 +1,17 @@
 import * as cdk from 'aws-cdk-lib';
 import { Construct } from 'constructs';
-// import * as sqs from 'aws-cdk-lib/aws-sqs';
+import { NetworkStack } from './network';
+import { BatchStack } from './batch';
+
 
 export class FastcatStack extends cdk.Stack {
-  constructor(scope: Construct, id: string, props?: cdk.StackProps) {
-    super(scope, id, props);
+    constructor(scope: Construct, id: string, props?: cdk.StackProps) {
+        super(scope, id, props);
 
-    // The code that defines your stack goes here
-
-    // example resource
-    // const queue = new sqs.Queue(this, 'FastcatQueue', {
-    //   visibilityTimeout: cdk.Duration.seconds(300)
-    // });
-  }
+        const network_stack = new NetworkStack(this, 'network', props);
+        const batch_stack = new BatchStack(this, 'batch', {
+                ... props,
+            vpc: network_stack.vpc,
+        });
+    }
 }
