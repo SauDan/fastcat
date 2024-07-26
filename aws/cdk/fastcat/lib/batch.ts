@@ -2,15 +2,23 @@ import * as cdk from 'aws-cdk-lib';
 import * as batch from 'aws-cdk-lib/aws-batch';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
+import * as ecr from 'aws-cdk-lib/aws-ecr';
+import * as iam from 'aws-cdk-lib/aws-iam';
 import { Construct } from 'constructs';
 
 
 const fargate_platform_version = ecs.FargatePlatformVersion.VERSION1_4;
-const container_image_name = "public.ecr.aws/amazonlinux/amazonlinux:2023";
 
+const AL2023_IMAGE = ecs.ContainerImage.fromRegistry("public.ecr.aws/amazonlinux/amazonlinux:2023");
 
-interface BatchStackProps extends cdk.NestedStackProps {
+interface ECRRepoInfo {
+    name: string,
+    tag: string,
+};
+
+export interface BatchStackProps extends cdk.NestedStackProps {
     vpc: ec2.IVpc,
+    image: ECRRepoInfo,
 };
 
 export class BatchStack extends cdk.NestedStack {
@@ -21,25 +29,43 @@ export class BatchStack extends cdk.NestedStack {
     constructor(scope: Construct, id: string, props: BatchStackProps) {
         super(scope, id, props);
 
-        const parent_path = scope.node.path.replace(/\//g, '-');
-        const addr8 = this.node.addr.substring(0, 8);
+        const { node_path, addr8 } = this.get_node_info(scope);
 
         this.sg = new ec2.SecurityGroup(this, 'sg', {
             vpc: props.vpc,
-            securityGroupName: `${parent_path}-sg-${addr8}`,
+            securityGroupName: `${node_path}-sg-${addr8}`,
         });
 
         const queue = new batch.JobQueue(this, 'queue', {
             computeEnvironments: this.make_compute_envs(scope, props.vpc),
-            jobQueueName: `${parent_path}-queue-${addr8}`,
+            jobQueueName: `${node_path}-queue-${addr8}`,
         });
 
+        this.make_job(scope, props);
+    }
+
+
+    get_node_info(self: Construct) {
+        return {
+            node_path: self.node.path.replace(/\//g, '-'),
+            addr8: self.node.addr.substring(0, 8),
+        };
+    }
+
+
+    make_job(scope: Construct, props: BatchStackProps) {
+        const { node_path, addr8 } = this.get_node_info(scope);
+
+        const image = ecs.ContainerImage.fromEcrRepository(
+            ecr.Repository.fromRepositoryName(this, 'repo', props.image.name),
+            props.image.tag);
+
         const job_def = new batch.EcsJobDefinition(this, 'job-def', {
-            jobDefinitionName: `${parent_path}-jobdef-${addr8}`,
+            jobDefinitionName: `${node_path}-jobdef-${addr8}`,
             container:  new batch.EcsFargateContainerDefinition(this, 'container-def', {
                 cpu: 2,
                 memory: cdk.Size.gibibytes(4),
-                image: ecs.ContainerImage.fromRegistry(container_image_name),
+                image: image,
                 fargatePlatformVersion: fargate_platform_version,
                 command: [
                     "/usr/bin/env",
@@ -52,8 +78,6 @@ export class BatchStack extends cdk.NestedStack {
     make_compute_envs(scope: Construct, vpc: ec2.IVpc) {
         const parent_path = scope.node.path.replace(/\//g, '-');
         const addr8 = this.node.addr.substring(0, 8);
-
-        console.log(`${parent_path}-spot-${addr8}`);
 
         const spot = new batch.FargateComputeEnvironment(this, 'spot', {
             computeEnvironmentName: `${parent_path}-spot-${addr8}`,

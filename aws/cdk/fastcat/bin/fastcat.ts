@@ -14,7 +14,13 @@ const env = stage_name == 'dev'? {
 } : undefined;
 
 
-new FastcatStack(stage, 'main', { env });
+new FastcatStack(stage, 'main', {
+    env,
+    image: {
+        name: "fastcat",
+        tag: "latest",
+    }
+});
 
 
 const tags = cdk.Tags.of(stage);
