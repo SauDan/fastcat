@@ -13,13 +13,19 @@ const env = stage_name == 'dev'? {
     region: "ap-east-1",
 } : undefined;
 
+const s3_configs = {
+    in_bucket: "hkgi-fastq-test2",  in_prefixes: [ "upload/HKGI-test", "dev" ],
+    out_bucket: "hkgi-fastq-test2", out_prefixes: [ "outputs", "dev/jobs" ],
+};
+
 
 new FastcatStack(stage, 'main', {
     env,
     image: {
         name: "fastcat",
         tag: "latest",
-    }
+    },
+    s3_configs,
 });
 
 

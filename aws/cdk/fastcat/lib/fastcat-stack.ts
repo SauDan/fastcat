@@ -4,7 +4,8 @@ import { NetworkStack } from './network';
 import { BatchStack, BatchStackProps } from './batch';
 
 
-interface FastcatStackProps extends cdk.StackProps, Omit<BatchStackProps, 'vpc'> {
+interface FastcatStackProps
+extends cdk.StackProps, Omit<BatchStackProps, 'vpc'> {
 };
 
 export class FastcatStack extends cdk.Stack {

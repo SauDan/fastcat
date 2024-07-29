@@ -19,6 +19,10 @@ interface ECRRepoInfo {
 export interface BatchStackProps extends cdk.NestedStackProps {
     vpc: ec2.IVpc,
     image: ECRRepoInfo,
+    s3_configs: {
+        in_bucket: string,  in_prefixes: string[],
+        out_bucket: string, out_prefixes: string[],
+    },
 };
 
 export class BatchStack extends cdk.NestedStack {
@@ -67,6 +71,7 @@ export class BatchStack extends cdk.NestedStack {
                 memory: cdk.Size.gibibytes(4),
                 image: image,
                 fargatePlatformVersion: fargate_platform_version,
+                jobRole: this.make_job_role(scope, props),
                 command: [
                     "/usr/bin/env",
                 ],
@@ -97,5 +102,38 @@ export class BatchStack extends cdk.NestedStack {
             { computeEnvironment: spot,     order:1 },
             { computeEnvironment: ondemand, order:2 },
         ];
+    }
+
+
+    make_job_role(scope: Construct, props: BatchStackProps) {
+        const { node_path } = this.get_node_info(scope);
+        const policy =
+            new iam.ManagedPolicy(scope, 's3-access', {
+                managedPolicyName: `${node_path}-s3Access`,
+                statements: [
+                    new iam.PolicyStatement({
+                        actions: [ "s3:GetObject" ],
+                        resources: props.s3_configs.in_prefixes.map(p =>
+                            `arn:aws:s3:::${props.s3_configs.in_bucket}/${p}/*` //*/
+                                                                   ),
+                    }),
+                    new iam.PolicyStatement({
+                        actions: [ "s3:PutObject" ],
+                        resources: props.s3_configs.out_prefixes.map(p =>
+                            `arn:aws:s3:::${props.s3_configs.out_bucket}/${p}/*` //*/
+                                                                    ),
+                    }),
+                ],
+            });
+
+        const role = new iam.Role(scope, 'job-role', {
+            roleName: `${node_path}-jobRole`,
+            assumedBy: new iam.ServicePrincipal("ecs-tasks.amazonaws.com"),
+            managedPolicies: [
+                policy
+            ],
+        });
+
+        return role;
     }
 }
