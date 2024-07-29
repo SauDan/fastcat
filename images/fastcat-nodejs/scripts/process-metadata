@@ -1,0 +1,42 @@
+#!/bin/bash
+set -euo pipefail
+set -x
+
+(( $# == 2 )) || {
+    cat >&2 <<EOF
+$0: <metadata> <out_prefix>
+Parse input metadata file and create files needed for
+the jobs to be spawned
+
+where
+    <metadata> is an s3:// URL to the input metadata file
+    <out_prefix> is an s3:// URL prefix to put the output
+EOF
+
+    exit 1
+}
+
+metadata_url="$1"
+output_url_prefix="$2"
+
+job_rand="$(uuidgen | cut -d- -f1)"
+job_ts="$(TZ=UTC date +%Y%m%d-%H%M%S)"
+job_id="$job_ts-$job_rand"
+
+mkdir -p /tmp/job/data
+cd /tmp/job
+
+
+aws s3 cp "$metadata_url" metadata.tsv
+
+node --enable-source-maps /opt/nodejs/dist/meta-parser.js \
+     metadata.tsv \
+     data
+
+echo "$job_id" > data/job.id
+
+tar zcvf - -C data . |\
+    aws s3 cp - "$output_url_prefix/$job_id.tgz"
+
+
+#end
