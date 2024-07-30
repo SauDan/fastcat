@@ -19,6 +19,7 @@ interface ECRRepoInfo {
 export interface BatchStackProps extends cdk.NestedStackProps {
     vpc: ec2.IVpc,
     image: ECRRepoInfo,
+    metadata_parsing_image: ECRRepoInfo,
     s3_configs: {
         in_bucket: string,  in_prefixes: string[],
         out_bucket: string, out_prefixes: string[],
@@ -28,6 +29,7 @@ export interface BatchStackProps extends cdk.NestedStackProps {
 export class BatchStack extends cdk.NestedStack {
 
     private sg: ec2.ISecurityGroup;
+    private job_role: iam.IRole;
 
 
     constructor(scope: Construct, id: string, props: BatchStackProps) {
@@ -40,12 +42,15 @@ export class BatchStack extends cdk.NestedStack {
             securityGroupName: `${node_path}-sg-${addr8}`,
         });
 
+        this.job_role = this.make_job_role(scope, props);
+
         const queue = new batch.JobQueue(this, 'queue', {
             computeEnvironments: this.make_compute_envs(scope, props.vpc),
             jobQueueName: `${node_path}-queue-${addr8}`,
         });
 
         this.make_job(scope, props);
+        this.make_metadata_parsing_job(scope, props);
     }
 
 
@@ -71,9 +76,42 @@ export class BatchStack extends cdk.NestedStack {
                 memory: cdk.Size.gibibytes(4),
                 image: image,
                 fargatePlatformVersion: fargate_platform_version,
-                jobRole: this.make_job_role(scope, props),
+                jobRole: this.job_role,
                 command: [
                     "/usr/bin/env",
+                ],
+            }),
+        });
+    }
+
+
+    make_metadata_parsing_job(scope: Construct, props: BatchStackProps) {
+        const job = new Construct(this, 'metadata-parsing');
+        const { node_path, addr8 } = this.get_node_info(job);
+
+        const image = ecs.ContainerImage.fromEcrRepository(
+            ecr.Repository.fromRepositoryName(job, 'repo', props.metadata_parsing_image.name),
+            props.metadata_parsing_image.tag);
+
+        const job_def = new batch.EcsJobDefinition(job, 'job-def', {
+            jobDefinitionName: `${node_path}-jobdef-${addr8}`,
+            propagateTags: true,
+            retryAttempts: 5,
+            retryStrategies: [
+                batch.RetryStrategy.of(batch.Action.EXIT,
+                                       batch.Reason.CANNOT_PULL_CONTAINER),
+            ],
+            timeout: cdk.Duration.minutes(10),
+            container:  new batch.EcsFargateContainerDefinition(job, 'container-def', {
+                cpu: 1,
+                memory: cdk.Size.gibibytes(2),
+                image: image,
+                fargatePlatformVersion: fargate_platform_version,
+                jobRole: this.job_role,
+                command: [
+                    "process-metadata",
+                    "Ref::metadata_file_s3_url",
+                    "Ref::output_dir_s3_url",
                 ],
             }),
         });

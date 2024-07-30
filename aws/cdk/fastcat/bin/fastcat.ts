@@ -25,6 +25,10 @@ new FastcatStack(stage, 'main', {
         name: "fastcat",
         tag: "latest",
     },
+    metadata_parsing_image: {
+        name: "fastcat-nodejs",
+        tag: "latest",
+    },
     s3_configs,
 });
 
