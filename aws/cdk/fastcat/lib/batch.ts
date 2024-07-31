@@ -49,8 +49,8 @@ export class BatchStack extends cdk.NestedStack {
             jobQueueName: `${node_path}-queue-${addr8}`,
         });
 
-        this.make_job(scope, props);
         this.make_metadata_parsing_job(scope, props);
+        this.make_concat_job(scope, props);
     }
 
 
@@ -62,15 +62,23 @@ export class BatchStack extends cdk.NestedStack {
     }
 
 
-    make_job(scope: Construct, props: BatchStackProps) {
-        const { node_path, addr8 } = this.get_node_info(scope);
+    make_concat_job(scope: Construct, props: BatchStackProps) {
+        const job = new Construct(this, 'concat');
+        const { node_path, addr8 } = this.get_node_info(job);
 
         const image = ecs.ContainerImage.fromEcrRepository(
-            ecr.Repository.fromRepositoryName(this, 'repo', props.image.name),
+            ecr.Repository.fromRepositoryName(job, 'repo', props.image.name),
             props.image.tag);
 
-        const job_def = new batch.EcsJobDefinition(this, 'job-def', {
+        const job_def = new batch.EcsJobDefinition(job, 'job-def', {
             jobDefinitionName: `${node_path}-jobdef-${addr8}`,
+            propagateTags: true,
+            retryAttempts: 5,
+            retryStrategies: [
+                batch.RetryStrategy.of(batch.Action.EXIT,
+                                       batch.Reason.CANNOT_PULL_CONTAINER),
+            ],
+            timeout: cdk.Duration.hours(4),
             container:  new batch.EcsFargateContainerDefinition(this, 'container-def', {
                 cpu: 2,
                 memory: cdk.Size.gibibytes(4),
@@ -78,7 +86,10 @@ export class BatchStack extends cdk.NestedStack {
                 fargatePlatformVersion: fargate_platform_version,
                 jobRole: this.job_role,
                 command: [
-                    "/usr/bin/env",
+                    "concat-fastq",
+                    "Ref::job_tgz_s3_url",
+                    "Ref::FASTQ_out_prefix",
+                    "Ref::MD5_out_prefix",
                 ],
             }),
         });
