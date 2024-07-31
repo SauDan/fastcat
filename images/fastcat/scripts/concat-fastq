@@ -1,0 +1,152 @@
+#!/bin/bash
+set -eou pipefail
+
+env
+
+[[ "${DEBUG:-}" ]] && set -x
+
+
+(( $# == 3 )) || {
+    cat >&2 <<EOF
+$0: <job_tgz> <FASTQ_out_prefix> <stats_out_prefix>
+1) Download the job descriptions in <job_tgz> from S3.
+2) create one concatenated FASTQ.gz file as a subjob of an AWS Batch Job array
+   and upload it to S3.
+3) upload the MD5 to S3.
+
+where
+    <job_tgz> is an s3:// URL to the job descriptions
+    <FASTQ_out_prefix> is an s3:// URL prefix to upload the concatenated output file
+    <stats_out_prefix> is an s3:// URL prefix to upload the statistics and MD5
+EOF
+
+    exit 1
+}
+
+
+upload_chunk_size=$((128 * 1024 * 1024)) # 128MB
+
+metadata_url="$1"
+FASTQ_out_prefix="$2"
+stats_out_prefix="$3"
+job_index="${FASTCAT_JOB_ARRAY_INDEX:-${AWS_BATCH_JOB_ARRAY_INDEX:?This script should be run in a AWS Batch *Array* job}}"
+
+
+cd /tmp
+aws s3 cp "$metadata_url" job.tgz
+
+mkdir -p job
+cd job
+tar xvf ../job.tgz
+
+job_id="$(cat job.id)"
+[[ -n "$job_id" ]] || {
+    echo "cannot determine job id from $metadata_url" >& 2
+    exit 1
+}
+echo "job $job_id subjob $job_index"
+
+job_file_base="job.$job_index"
+job_data_file="$job_file_base.data"
+lib_id="$(grep ^libid "$job_data_file" | cut -f2)"
+read_end="$(grep ^end "$job_data_file" | cut -f2)"
+[[ -n "$lib_id" && -n "$read_end" ]] || {
+    echo "cannot determine lib ID or read end from $metadata_url"
+    exit 1
+}
+echo "for $lib_id read $read_end"
+
+job_files_file="$job_file_base.files"
+mapfile -t file_s3_urls < <(cut -f2 "$job_files_file")
+mapfile -t read_counts  < <(cut -f1 "$job_files_file")
+
+
+
+wait_for_file() {
+    local filename="$1"
+    until [[ -e "$filename" ]]; do
+        echo "waiting for $filename..." >& 2
+        sleep 1;
+    done
+}
+
+s3_concat_and_count_reads() {
+    local linecount_file
+
+    for i in "${!file_s3_urls[@]}"; do
+        local s3_url="${file_s3_urls[i]}"
+        local linecount_file="line_count.$i"
+        aws s3 cp "$s3_url" - |\
+            tee >(zcat | wc -l > "$linecount_file.tmp" &&
+                      mv -i "$linecount_file"{.tmp,})
+    done
+
+    # verify read counts
+    local total_reads=0
+    for i in "${!file_s3_urls[@]}"; do
+        local s3_url="${file_s3_urls[i]}"
+        local read_count_expected="${read_counts[i]}"
+        local linecount_file="line_count.$i"
+        wait_for_file "$linecount_file"
+
+        local lines
+        lines="$(cat "$linecount_file")"
+        ((lines % 4 == 0)) || {
+            echo "Line count ($lines) is not a multiple of 4... truncated file? <== $s3_url" >& 2
+            exit 1
+        }
+        local read_count_found=$((lines / 4))
+        ((total_reads += read_count_found))
+
+        ((read_count_expected < 1)) && continue
+
+        ((read_count_found == read_count_expected)) || {
+            echo "Read count mismatch (expected=$read_count_expected found=$read_count_found) <== $s3_url" >& 2
+            exit 1
+        }
+
+        echo "Read count = $read_count_expected as expected <== $s3_url" >& 2
+    done
+
+    echo "$total_reads" > read_count.total
+}
+
+calc_md5() {
+    local out_file="$1"
+    local tmp_file="$out_file.tmp"
+
+    rm -f "$out_file"
+    md5sum > "$tmp_file"
+    mv -f "$tmp_file" "$out_file"
+}
+
+
+
+fastq_base="${lib_id}_${read_end}"
+out_url="$FASTQ_out_prefix/$fastq_base.fastq.gz"
+stats_out_url="$stats_out_prefix/$fastq_base.fastq.stats"
+
+
+echo "Concatenating $fastq_base ..."
+for i in "${file_s3_urls[@]}"; do
+    echo "  $i"
+done
+echo "==>$out_url"
+echo "   $stats_out_url"
+
+s3_concat_and_count_reads |\
+    tee >(calc_md5 md5) |\
+    aws s3 cp --expected-size $((10000 * upload_chunk_size)) - "$out_url"
+
+read_count="$(cat read_count.total)"
+
+wait_for_file md5
+md5="$(cut -d\  -f1 md5)"
+
+echo "$md5"$'\t'"$read_count" |\
+    aws s3 cp - "$stats_out_url"
+
+
+echo "Done $fastq_base"
+
+# end
