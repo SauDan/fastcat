@@ -15,7 +15,8 @@ const env = stage_name == 'dev'? {
 
 const s3_configs = {
     in_bucket: "hkgi-fastq-test2",  in_prefixes: [ "upload/HKGI-test", "dev" ],
-    out_bucket: "hkgi-fastq-test2", out_prefixes: [ "outputs", "dev/jobs" ],
+    job_bucket: "hkgi-fastq-test2",  job_prefixes: [ "dev/jobs" ],
+    out_bucket: "hkgi-fastq-test2", out_prefixes: [ "outputs" ],
 };
 
 
@@ -25,7 +26,7 @@ new FastcatStack(stage, 'main', {
         name: "fastcat",
         tag: "latest",
     },
-    metadata_parsing_image: {
+    nodejs_image: {
         name: "fastcat-nodejs",
         tag: "latest",
     },

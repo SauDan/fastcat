@@ -19,9 +19,10 @@ interface ECRRepoInfo {
 export interface BatchStackProps extends cdk.NestedStackProps {
     vpc: ec2.IVpc,
     image: ECRRepoInfo,
-    metadata_parsing_image: ECRRepoInfo,
+    nodejs_image: ECRRepoInfo,
     s3_configs: {
         in_bucket: string,  in_prefixes: string[],
+        job_bucket: string, job_prefixes: string[],
         out_bucket: string, out_prefixes: string[],
     },
 };
@@ -51,6 +52,7 @@ export class BatchStack extends cdk.NestedStack {
 
         this.make_metadata_parsing_job(scope, props);
         this.make_concat_job(scope, props);
+        this.make_metadata_generation_job(scope, props);
     }
 
 
@@ -97,12 +99,30 @@ export class BatchStack extends cdk.NestedStack {
 
 
     make_metadata_parsing_job(scope: Construct, props: BatchStackProps) {
-        const job = new Construct(this, 'metadata-parsing');
+        this.make_nodejs_job(scope, props, 'metadata-parsing', [
+            "process-metadata",
+            "Ref::metadata_file_s3_url",
+            "Ref::output_dir_s3_url",
+        ]);
+    }
+
+    make_metadata_generation_job(scope: Construct, props: BatchStackProps) {
+        this.make_nodejs_job(scope, props, 'metadata-generation', [
+            "consolidate-metadata",
+            "Ref::job_file_s3_url",
+            "Ref::stats_s3_url_prefix",
+            "Ref::fastq_s3_url_prefix",
+        ]);
+    }
+
+    make_nodejs_job(scope: Construct, props: BatchStackProps,
+                    name: string, command: string[]) {
+        const job = new Construct(this, name);
         const { node_path, addr8 } = this.get_node_info(job);
 
         const image = ecs.ContainerImage.fromEcrRepository(
-            ecr.Repository.fromRepositoryName(job, 'repo', props.metadata_parsing_image.name),
-            props.metadata_parsing_image.tag);
+            ecr.Repository.fromRepositoryName(job, 'repo', props.nodejs_image.name),
+            props.nodejs_image.tag);
 
         const job_def = new batch.EcsJobDefinition(job, 'job-def', {
             jobDefinitionName: `${node_path}-jobdef-${addr8}`,
@@ -119,11 +139,7 @@ export class BatchStack extends cdk.NestedStack {
                 image: image,
                 fargatePlatformVersion: fargate_platform_version,
                 jobRole: this.job_role,
-                command: [
-                    "process-metadata",
-                    "Ref::metadata_file_s3_url",
-                    "Ref::output_dir_s3_url",
-                ],
+                command,
             }),
         });
     }
@@ -165,6 +181,15 @@ export class BatchStack extends cdk.NestedStack {
                         resources: props.s3_configs.in_prefixes.map(p =>
                             `arn:aws:s3:::${props.s3_configs.in_bucket}/${p}/*` //*/
                                                                    ),
+                    }),
+                    new iam.PolicyStatement({
+                        actions: [ "s3:GetObject", "s3:PutObject", "s3:ListBucket" ],
+                        resources: [
+                            `arn:aws:s3:::${props.s3_configs.in_bucket}`,
+                                ... props.s3_configs.job_prefixes.map(p =>
+                                        `arn:aws:s3:::${props.s3_configs.in_bucket}/${p}/*` //*/
+                                                                     ),
+                        ],
                     }),
                     new iam.PolicyStatement({
                         actions: [ "s3:PutObject" ],
