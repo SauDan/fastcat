@@ -1,0 +1,62 @@
+#!/bin/bash
+set -eou pipefail
+
+env
+
+[[ "${DEBUG:-}" ]] && set -x
+
+
+(( $# == 3 )) || {
+    cat >&2 <<EOF
+$0: <job_tgz> <stats_prefix> <fastq_prefix>
+1) Download the job descriptions in <job_tgz> from S3.
+2) Download statistics (incl. MD5) from S3.
+3) Consolidate statistics, generate metadata file and upload the MD5 to S3.
+
+where
+    <job_tgz> is an s3:// URL to the job descriptions
+    <stats_prefix> is an s3:// URL prefix to the statistics
+    <FASTQ_prefix> is an s3:// URL prefix to the concatenated FASTQ files; the
+                   generated metadata file would be uploaded here
+EOF
+
+    exit 1
+}
+
+
+job_tgz_url="$1"
+stats_prefix="$2"
+fastq_prefix="$3"
+
+stats_out_url="$fastq_prefix/metadata.tsv"
+
+cd /tmp
+aws s3 cp "$job_tgz_url" job.tgz
+aws s3 sync "$stats_prefix" stats/
+stats_dir="$(realpath stats)"
+
+mkdir -p job
+cd job
+job_dir="$(realpath .)"
+tar xvf ../job.tgz
+
+job_id="$(cat job.id)"
+[[ -n "$job_id" ]] || {
+    echo "cannot determine job id from $job_tgz_url" >& 2
+    exit 1
+}
+echo "job $job_id consolidation"
+
+
+node --enable-source-maps /opt/nodejs/dist/meta-formatter.js \
+     "$job_dir" \
+     "$stats_dir" \
+     "$fastq_prefix" \
+     "$job_dir/metadata.tsv"
+
+aws s3 cp metadata.tsv "$stats_out_url"
+
+
+echo "uploaded $stats_out_url"
+
+# end
