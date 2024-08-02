@@ -31,6 +31,7 @@ new FastcatStack(stage, 'main', {
         tag: "latest",
     },
     s3_configs,
+    triggering_suffix: ".tsv",
 });
 
 

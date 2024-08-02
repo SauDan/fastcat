@@ -28,6 +28,8 @@ export interface BatchStackProps extends cdk.NestedStackProps {
 };
 
 export class BatchStack extends cdk.NestedStack {
+    queue: batch.IJobQueue;
+    metadata_parsing_job: batch.IJobDefinition;
 
     private sg: ec2.ISecurityGroup;
     private job_role: iam.IRole;
@@ -45,12 +47,12 @@ export class BatchStack extends cdk.NestedStack {
 
         this.job_role = this.make_job_role(scope, props);
 
-        const queue = new batch.JobQueue(this, 'queue', {
+        this.queue = new batch.JobQueue(this, 'queue', {
             computeEnvironments: this.make_compute_envs(scope, props.vpc),
             jobQueueName: `${node_path}-queue-${addr8}`,
         });
 
-        this.make_metadata_parsing_job(scope, props);
+        this.metadata_parsing_job = this.make_metadata_parsing_job(scope, props);
         this.make_concat_job(scope, props);
         this.make_metadata_generation_job(scope, props);
     }
@@ -99,7 +101,7 @@ export class BatchStack extends cdk.NestedStack {
 
 
     make_metadata_parsing_job(scope: Construct, props: BatchStackProps) {
-        this.make_nodejs_job(scope, props, 'metadata-parsing', [
+        return this.make_nodejs_job(scope, props, 'metadata-parsing', [
             "process-metadata",
             "Ref::metadata_file_s3_url",
             "Ref::output_dir_s3_url",
@@ -107,7 +109,7 @@ export class BatchStack extends cdk.NestedStack {
     }
 
     make_metadata_generation_job(scope: Construct, props: BatchStackProps) {
-        this.make_nodejs_job(scope, props, 'metadata-generation', [
+        return this.make_nodejs_job(scope, props, 'metadata-generation', [
             "consolidate-metadata",
             "Ref::job_file_s3_url",
             "Ref::stats_s3_url_prefix",
@@ -142,6 +144,7 @@ export class BatchStack extends cdk.NestedStack {
                 command,
             }),
         });
+        return job_def;
     }
 
 
