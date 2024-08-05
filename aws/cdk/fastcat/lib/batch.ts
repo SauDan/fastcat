@@ -27,6 +27,11 @@ export interface BatchStackProps extends cdk.NestedStackProps {
     },
 };
 
+interface MetadataParsingJobProps extends BatchStackProps {
+    concat_job: batch.IJobDefinition,
+    metadata_generation_job: batch.IJobDefinition,
+};
+
 export class BatchStack extends cdk.NestedStack {
     queue: batch.IJobQueue;
     metadata_parsing_job: batch.IJobDefinition;
@@ -52,9 +57,18 @@ export class BatchStack extends cdk.NestedStack {
             jobQueueName: `${node_path}-queue-${addr8}`,
         });
 
-        this.metadata_parsing_job = this.make_metadata_parsing_job(scope, props);
-        this.make_concat_job(scope, props);
-        this.make_metadata_generation_job(scope, props);
+        const concat_job = this.make_concat_job(scope, props);
+        concat_job.grantSubmitJob(this.job_role, this.queue);
+
+        const metadata_generation_job =
+            this.make_metadata_generation_job(scope, props);
+        metadata_generation_job.grantSubmitJob(this.job_role, this.queue);
+
+        this.metadata_parsing_job = this.make_metadata_parsing_job(scope, {
+                ...props,
+            concat_job,
+            metadata_generation_job,
+        });
     }
 
 
@@ -97,15 +111,22 @@ export class BatchStack extends cdk.NestedStack {
                 ],
             }),
         });
+
+        return job_def;
     }
 
 
-    make_metadata_parsing_job(scope: Construct, props: BatchStackProps) {
+    make_metadata_parsing_job(scope: Construct, props: MetadataParsingJobProps) {
         return this.make_nodejs_job(scope, props, 'metadata-parsing', [
             "process-metadata",
             "Ref::metadata_file_s3_url",
-            "Ref::output_dir_s3_url",
-        ]);
+        ], {
+            FASTCAT_S3URL_OUTPUT_PREFIX: `s3://${props.s3_configs.out_bucket}/${props.s3_configs.out_prefixes[0]}`,
+            FASTCAT_S3URL_JOBS_PREFIX: `s3://${props.s3_configs.job_bucket}/${props.s3_configs.job_prefixes[0]}`,
+            FASTCAT_JOB_QUEUE_ARN: this.queue.jobQueueArn,
+            FASTCAT_CONCAT_JOB_DEF_ARN: props.concat_job.jobDefinitionArn,
+            FASTCAT_METADATA_GENERATION_JOB_DEF_ARN: props.metadata_generation_job.jobDefinitionArn,
+        });
     }
 
     make_metadata_generation_job(scope: Construct, props: BatchStackProps) {
@@ -118,7 +139,9 @@ export class BatchStack extends cdk.NestedStack {
     }
 
     make_nodejs_job(scope: Construct, props: BatchStackProps,
-                    name: string, command: string[]) {
+                    name: string,
+                    command: string[],
+                    environment?: Record<string,string>) {
         const job = new Construct(this, name);
         const { node_path, addr8 } = this.get_node_info(job);
 
@@ -142,6 +165,7 @@ export class BatchStack extends cdk.NestedStack {
                 fargatePlatformVersion: fargate_platform_version,
                 jobRole: this.job_role,
                 command,
+                environment,
             }),
         });
         return job_def;
