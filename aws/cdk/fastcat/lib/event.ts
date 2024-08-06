@@ -34,8 +34,7 @@ export class EventStack extends cdk.NestedStack {
         const key = events.EventField.fromPath("$.detail.object.key");
         const input_event = {
             Parameters: {
-                metadata_file_s3_url: `s3://${bucket}/${key}`,
-                output_dir_s3_url: `s3://${props.job_s3.bucket}/${props.job_s3.prefix}`,
+                fastqlist_file_s3_url: `s3://${bucket}/${key}`,
             },
         };
 

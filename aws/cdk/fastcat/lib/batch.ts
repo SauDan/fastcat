@@ -80,7 +80,7 @@ export class BatchStack extends cdk.NestedStack {
     }
 
 
-    make_concat_job(scope: Construct, props: BatchStackProps) {
+    private make_concat_job(scope: Construct, props: BatchStackProps) {
         const job = new Construct(this, 'concat');
         const { node_path, addr8 } = this.get_node_info(job);
 
@@ -105,10 +105,11 @@ export class BatchStack extends cdk.NestedStack {
                 jobRole: this.job_role,
                 command: [
                     "concat-fastq",
-                    "Ref::job_tgz_s3_url",
-                    "Ref::FASTQ_out_prefix",
-                    "Ref::MD5_out_prefix",
+                    "Ref::job_file_s3_url",
                 ],
+                environment: {
+                        ... BatchStack.common_environments(props),
+                }
             }),
         });
 
@@ -116,32 +117,39 @@ export class BatchStack extends cdk.NestedStack {
     }
 
 
-    make_metadata_parsing_job(scope: Construct, props: MetadataParsingJobProps) {
-        return this.make_nodejs_job(scope, props, 'metadata-parsing', [
-            "process-metadata",
-            "Ref::metadata_file_s3_url",
-        ], {
+    private static common_environments(props: BatchStackProps) {
+        return {
             FASTCAT_S3URL_OUTPUT_PREFIX: `s3://${props.s3_configs.out_bucket}/${props.s3_configs.out_prefixes[0]}`,
             FASTCAT_S3URL_JOBS_PREFIX: `s3://${props.s3_configs.job_bucket}/${props.s3_configs.job_prefixes[0]}`,
+        };
+    }
+
+
+    private make_metadata_parsing_job(scope: Construct,
+                                      props: MetadataParsingJobProps) {
+        return this.make_nodejs_job(scope, props, 'metadata-parsing', [
+            "process-metadata",
+            "Ref::fastqlist_file_s3_url",
+        ], {
             FASTCAT_JOB_QUEUE_ARN: this.queue.jobQueueArn,
             FASTCAT_CONCAT_JOB_DEF_ARN: props.concat_job.jobDefinitionArn,
             FASTCAT_METADATA_GENERATION_JOB_DEF_ARN: props.metadata_generation_job.jobDefinitionArn,
         });
     }
 
-    make_metadata_generation_job(scope: Construct, props: BatchStackProps) {
+    private make_metadata_generation_job(scope: Construct,
+                                         props: BatchStackProps) {
         return this.make_nodejs_job(scope, props, 'metadata-generation', [
             "consolidate-metadata",
             "Ref::job_file_s3_url",
-            "Ref::stats_s3_url_prefix",
-            "Ref::fastq_s3_url_prefix",
         ]);
     }
 
-    make_nodejs_job(scope: Construct, props: BatchStackProps,
-                    name: string,
-                    command: string[],
-                    environment?: Record<string,string>) {
+    private make_nodejs_job(scope: Construct,
+                            props: BatchStackProps,
+                            name: string,
+                            command: string[],
+                            environment?: Record<string,string>) {
         const job = new Construct(this, name);
         const { node_path, addr8 } = this.get_node_info(job);
 
@@ -165,14 +173,17 @@ export class BatchStack extends cdk.NestedStack {
                 fargatePlatformVersion: fargate_platform_version,
                 jobRole: this.job_role,
                 command,
-                environment,
+                environment: {
+                        ...BatchStack.common_environments(props),
+                        ...environment,
+                },
             }),
         });
         return job_def;
     }
 
 
-    make_compute_envs(scope: Construct, vpc: ec2.IVpc) {
+    private make_compute_envs(scope: Construct, vpc: ec2.IVpc) {
         const parent_path = scope.node.path.replace(/\//g, '-');
         const addr8 = this.node.addr.substring(0, 8);
 
@@ -197,7 +208,7 @@ export class BatchStack extends cdk.NestedStack {
     }
 
 
-    make_job_role(scope: Construct, props: BatchStackProps) {
+    private make_job_role(scope: Construct, props: BatchStackProps) {
         const { node_path } = this.get_node_info(scope);
         const policy =
             new iam.ManagedPolicy(scope, 's3-access', {

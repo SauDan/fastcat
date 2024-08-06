@@ -5,54 +5,70 @@ env
 
 [[ "${DEBUG:-}" ]] && set -x
 
+# check for existence of required env. vars.
+: "$FASTCAT_S3URL_OUTPUT_PREFIX" # e.g. s3://hkgi-fastq-test2/outputs
+: "$FASTCAT_S3URL_JOBS_PREFIX" # e.g. s3://hkgi-fastq-test2/dev/jobs
 
-(( $# == 3 )) || {
+
+(( $# == 1 )) || {
     cat >&2 <<EOF
-$0: <job_tgz> <stats_prefix> <fastq_prefix>
-1) Download the job descriptions in <job_tgz> from S3.
+$0: <job_file_s3>
+1) Download the job file from S3.
 2) Download statistics (incl. MD5) from S3.
 3) Consolidate statistics, generate metadata file and upload the MD5 to S3.
 
 where
-    <job_tgz> is an s3:// URL to the job descriptions
-    <stats_prefix> is an s3:// URL prefix to the statistics
-    <FASTQ_prefix> is an s3:// URL prefix to the concatenated FASTQ files; the
-                   generated metadata file would be uploaded here
+    <job_file_s3>  is an s3:// URL to the job file
+
+Environment variables *required*:
+    FASTCAT_S3URL_OUTPUT_PREFIX (format: s3://<bucket>/<prefix>)
+        S3 URL prefix for output metadata file
+    FASTCAT_S3URL_JOBS_PREFIX (format: s3://<bucket>/<prefix>)
+        S3 URL prefix for intermediate files of jobs
 EOF
 
     exit 1
 }
 
 
-job_tgz_url="$1"
-stats_prefix="$2"
-fastq_prefix="$3"
+job_file_url="$1"
+
+cd /tmp
+aws s3 cp "$job_file_url" job.json
+
+
+job_id="$(jq -r '.job_id' < job.json)"
+batch_id="$(jq -r '.batch_id' < job.json)"
+[[ -n "$job_id" ]] || {
+    echo "cannot determine job id from $job_file_url" >& 2
+    exit 1
+}
+[[ -n "$batch_id" ]] || {
+    echo "cannot determine batch id from $job_file_url" >& 2
+    exit 1
+}
+
+stats_prefix="$FASTCAT_S3URL_JOBS_PREFIX/$job_id"
+fastq_prefix="$FASTCAT_S3URL_OUTPUT_PREFIX/$batch_id"
 
 stats_out_url="$fastq_prefix/metadata.tsv"
 
-cd /tmp
-aws s3 cp "$job_tgz_url" job.tgz
 aws s3 sync "$stats_prefix" stats/
 stats_dir="$(realpath stats)"
 
-mkdir -p job
-cd job
-job_dir="$(realpath .)"
-tar xvf ../job.tgz
 
-job_id="$(cat job.id)"
 [[ -n "$job_id" ]] || {
-    echo "cannot determine job id from $job_tgz_url" >& 2
+    echo "cannot determine job id from $job_file_url" >& 2
     exit 1
 }
 echo "job $job_id consolidation"
 
 
 node --enable-source-maps /opt/nodejs/dist/meta-formatter.js \
-     "$job_dir" \
+     "./job.json" \
      "$stats_dir" \
      "$fastq_prefix" \
-     "$job_dir/metadata.tsv"
+     "./metadata.tsv"
 
 aws s3 cp metadata.tsv "$stats_out_url"
 

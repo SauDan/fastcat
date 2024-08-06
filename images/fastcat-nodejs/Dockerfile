@@ -11,7 +11,7 @@ RUN rm -rf src nodejs
 
 FROM public.ecr.aws/docker/library/node:20.16.0-alpine3.20 AS final
 
-RUN apk add bash uuidgen aws-cli
+RUN apk add bash uuidgen jq aws-cli
 
 COPY --from=build /opt/nodejs /opt/nodejs
 ENV NODE_ENV=production

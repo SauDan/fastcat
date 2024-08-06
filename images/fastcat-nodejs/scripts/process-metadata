@@ -15,12 +15,15 @@ env
 
 (( $# == 1 )) || {
     cat >&2 <<EOF
-$0: <metadata>
-Parse input metadata file and create files needed for
-the jobs to be spawned
+$0: <fastq_list>
+Parse input metadata files and create a job file containing
+data for the jobs to be spawned
 
 where
-    <metadata> is an s3:// URL to the input metadata file
+    <fastq_list> is an s3:// URL to the input fastq_list.csv;
+                 the accompanying Demultiplex_Stats.csv file is
+                 assumed to be found under the same directory;
+                 All input fastq.gz files should also be found there.
 
 Environment variables *required*:
     FASTCAT_S3URL_OUTPUT_PREFIX (format: s3://<bucket>/<prefix>)
@@ -38,75 +41,64 @@ EOF
     exit 1
 }
 
-metadata_url="$1"
+fqlist_url="$1"
 
-job_rand="$(uuidgen | cut -d- -f1)"
+job_rand="$(echo "${AWS_BATCH_JOB_ID:-$(uuidgen)}" | cut -d- -f1)"
 job_ts="$(TZ=UTC date +%Y%m%d-%H%M%S)"
 job_id="$job_ts-$job_rand"
-batch_id="${metadata_url%/*}"
-batch_id="${batch_id##*/}"
+in_dir_url="${fqlist_url%/*}"
+demux_url="$in_dir_url/Demultiplex_Stats.csv"
+batch_id="${in_dir_url##*/}"
 
 [[ "$batch_id" ]] || {
-    echo "Cannot derive batch id from: $metadata_url" >& 2
+    echo "Cannot derive batch id from: $fqlist_url" >& 2
     exit 1
 }
 
-output_s3="$FASTCAT_S3URL_OUTPUT_PREFIX/$batch_id"
 job_s3="$FASTCAT_S3URL_JOBS_PREFIX/$job_id"
+job_file_s3="$job_s3/job.json"
 
 
 mkdir -p /tmp/job/data
 cd /tmp/job
 
 
-aws s3 cp "$metadata_url" metadata.tsv
+aws s3 cp "$fqlist_url" fqlist.csv
+aws s3 cp "$demux_url"  demux.csv
 
-node --enable-source-maps /opt/nodejs/dist/meta-parser.js \
-     metadata.tsv \
-     data
+node --enable-source-maps /opt/nodejs/dist/bcl2fq-metadata-parser.js \
+     demux.csv fqlist.csv \
+     "$in_dir_url" "$job_id" "$batch_id" \
+     job.json
 
-echo "$job_id" > data/job.id
+aws s3 cp job.json "$job_file_s3"
 
-tar zcvf - -C data . |\
-    aws s3 cp - "$job_s3.tgz"
+nr_subjobs="$(jq '.jobs | length' < job.json)"
 
-nr_subjobs="$(find data/ -name 'job.*.data' | wc -l)"
 
-declare -a params=(
-    "job_tgz_s3_url=$job_s3.tgz"
-    "FASTQ_out_prefix=$output_s3"
-    "MD5_out_prefix=$job_s3"
-)
 ${NO_SUBMIT_JOBS:+echo Not submitting: } \
 aws batch submit-job \
-    --query jobId --output text \
     --job-name "fastcat-$job_id" \
     --job-queue "$FASTCAT_JOB_QUEUE_ARN" \
     --job-definition "$FASTCAT_CONCAT_JOB_DEF_ARN" \
-    --parameters "$(IFS=","; echo "${params[*]}")" \
+    --parameters "job_file_s3_url=$job_file_s3" \
     --array-properties "size=$nr_subjobs" |\
-    tee concat-job.id
+    tee concat-job.json
 if [[ "${NO_SUBMIT_JOBS:-}" ]]; then
     concat_job_id="(unsubmitted)"
 else
-    concat_job_id="$(cat concat-job.id)"
+    concat_job_id="$(jq -r ".jobId" < concat-job.json)"
 fi
 #FIXME:    --tags ???
 
 
-declare -a params=(
-    "job_file_s3_url=$job_s3.tgz"
-    "stats_s3_url_prefix=$job_s3"
-    "fastq_s3_url_prefix=$output_s3"
-)
 ${NO_SUBMIT_JOBS:+echo Not submitting: } \
 aws batch submit-job \
     --job-name "fastcat-consolidate-$job_id" \
     --job-queue "$FASTCAT_JOB_QUEUE_ARN" \
     --job-definition "$FASTCAT_METADATA_GENERATION_JOB_DEF_ARN" \
-    --parameters "$(IFS=","; echo "${params[*]}")" \
+    --parameters "job_file_s3_url=$job_file_s3" \
     --depends-on "jobId=$concat_job_id,type=SEQUENTIAL"
-
 #FIXME:    --tags ???
 
 #end
