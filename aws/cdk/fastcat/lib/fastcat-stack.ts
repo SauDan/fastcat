@@ -1,5 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
+import * as sns from 'aws-cdk-lib/aws-sns';
 import * as s3 from 'aws-cdk-lib/aws-s3';
 import { Construct } from 'constructs';
 import { NetworkStack } from './network';
@@ -47,6 +48,14 @@ export class FastcatStack extends cdk.Stack {
             queueName: `${node_path}-dead-letters-${addr8}`,
         });
 
+
+        const failure_sns = new sns.Topic(this, 'failure-sns', {
+            topicName: `${node_path}-failure`,
+        })
+        const success_sns = new sns.Topic(this, 'success-sns', {
+            topicName: `${node_path}-success`,
+        })
+
         const event_stack = new EventStack(this, 'event', {
             dead_letter_queue,
             triggering_s3: {
@@ -57,11 +66,30 @@ export class FastcatStack extends cdk.Stack {
                 },
             },
             batch_queue: batch_stack.queue,
-            batch_job: batch_stack.metadata_parsing_job,
+            batch_job_first: batch_stack.metadata_parsing_job,
+            batch_job_last_name_prefix: BatchStack.metadata_generation_job_name_prefix,
             job_s3: {
                 bucket: props.s3_configs.job_bucket,
                 prefix: props.s3_configs.job_prefixes[0],
             },
+            failure_sns,
+            success_sns,
         });
+
+
+        new cdk.CfnOutput(this, 'FailureTopicName', {
+            value: failure_sns.topicName,
+        });
+        new cdk.CfnOutput(this, 'FailureTopicArn', {
+            value: failure_sns.topicArn,
+        });
+
+        new cdk.CfnOutput(this, 'SuccessTopicName', {
+            value: success_sns.topicName,
+        });
+        new cdk.CfnOutput(this, 'SuccessTopicArn', {
+            value: success_sns.topicArn,
+        });
+
     }
 }

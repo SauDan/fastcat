@@ -36,6 +36,7 @@ interface MetadataParsingJobProps extends BatchStackProps {
 export class BatchStack extends cdk.NestedStack {
     queue: batch.IJobQueue;
     metadata_parsing_job: batch.IJobDefinition;
+    static metadata_generation_job_name_prefix = "fastcat-consolidate-";
 
     private sg: ec2.ISecurityGroup;
     private job_role: iam.IRole;
