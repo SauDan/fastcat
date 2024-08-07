@@ -4,6 +4,7 @@ import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as ecr from 'aws-cdk-lib/aws-ecr';
 import * as iam from 'aws-cdk-lib/aws-iam';
+import * as s3 from 'aws-cdk-lib/aws-s3';
 import { Construct } from 'constructs';
 
 
@@ -21,9 +22,9 @@ export interface BatchStackProps extends cdk.NestedStackProps {
     image: ECRRepoInfo,
     nodejs_image: ECRRepoInfo,
     s3_configs: {
-        in_bucket: string,  in_prefixes: string[],
-        job_bucket: string, job_prefixes: string[],
-        out_bucket: string, out_prefixes: string[],
+        in_bucket: s3.IBucket,  in_prefixes: string[],
+        job_bucket: s3.IBucket, job_prefixes: string[],
+        out_bucket: s3.IBucket, out_prefixes: string[],
     },
 };
 
@@ -118,9 +119,12 @@ export class BatchStack extends cdk.NestedStack {
 
 
     private static common_environments(props: BatchStackProps) {
+        const s3 = props.s3_configs;
         return {
-            FASTCAT_S3URL_OUTPUT_PREFIX: `s3://${props.s3_configs.out_bucket}/${props.s3_configs.out_prefixes[0]}`,
-            FASTCAT_S3URL_JOBS_PREFIX: `s3://${props.s3_configs.job_bucket}/${props.s3_configs.job_prefixes[0]}`,
+            FASTCAT_S3URL_OUTPUT_PREFIX:
+                s3.out_bucket.s3UrlForObject(s3.out_prefixes[0]),
+            FASTCAT_S3URL_JOBS_PREFIX:
+                s3.job_bucket.s3UrlForObject(s3.job_prefixes[0]),
         };
     }
 
@@ -213,32 +217,22 @@ export class BatchStack extends cdk.NestedStack {
         const policy =
             new iam.ManagedPolicy(scope, 's3-access', {
                 managedPolicyName: `${node_path}-s3Access`,
-                statements: [
-                    new iam.PolicyStatement({
-                        actions: [ "s3:GetObject" ],
-                        resources: props.s3_configs.in_prefixes.map(p =>
-                            `arn:aws:s3:::${props.s3_configs.in_bucket}/${p}/*` //*/
-                                                                   ),
-                    }),
-                    new iam.PolicyStatement({
-                        actions: [ "s3:GetObject", "s3:PutObject", "s3:ListBucket" ],
-                        resources: [
-                            `arn:aws:s3:::${props.s3_configs.in_bucket}`,
-                                ... props.s3_configs.job_prefixes.map(p =>
-                                        `arn:aws:s3:::${props.s3_configs.in_bucket}/${p}/*` //*/
-                                                                     ),
-                        ],
-                    }),
-                    new iam.PolicyStatement({
-                        actions: [ "s3:PutObject" ],
-                        resources: props.s3_configs.out_prefixes.map(p =>
-                            `arn:aws:s3:::${props.s3_configs.out_bucket}/${p}/*` //*/
-                                                                    ),
-                    }),
-                ],
             });
 
-        const role = new iam.Role(scope, 'job-role', {
+        props.s3_configs.in_prefixes
+            .map(p => props.s3_configs.in_bucket
+                          .grantRead(policy, p + "/*"));
+
+        props.s3_configs.job_prefixes
+            .map(p => props.s3_configs.job_bucket
+                          .grantReadWrite(policy, p + "/*"));
+
+        props.s3_configs.out_prefixes
+            .map(p => props.s3_configs.out_bucket
+                          .grantWrite(policy, p + "/*"));
+
+
+       const role = new iam.Role(scope, 'job-role', {
             roleName: `${node_path}-jobRole`,
             assumedBy: new iam.ServicePrincipal("ecs-tasks.amazonaws.com"),
             managedPolicies: [

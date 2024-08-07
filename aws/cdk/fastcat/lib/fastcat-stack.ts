@@ -1,5 +1,6 @@
 import * as cdk from 'aws-cdk-lib';
 import * as sqs from 'aws-cdk-lib/aws-sqs';
+import * as s3 from 'aws-cdk-lib/aws-s3';
 import { Construct } from 'constructs';
 import { NetworkStack } from './network';
 import { BatchStack, BatchStackProps } from './batch';
@@ -7,7 +8,12 @@ import { EventStack } from './event';
 
 
 interface FastcatStackProps
-extends cdk.StackProps, Omit<BatchStackProps, 'vpc'> {
+extends cdk.StackProps, Omit<BatchStackProps, 'vpc' | 's3_configs'> {
+    s3_configs: {
+        in_bucket: string,  in_prefixes: string[],
+        job_bucket: string, job_prefixes: string[],
+        out_bucket: string, out_prefixes: string[],
+    },
     triggering_suffix: string,
 };
 
@@ -18,10 +24,23 @@ export class FastcatStack extends cdk.Stack {
         const node_path = this.node.path.replace(/\//g, '-');
         const addr8 = this.node.addr.substring(0, 8);
 
+        const in_bucket = s3.Bucket.fromBucketName(this, 'in-bucket',
+                                                   props.s3_configs.in_bucket);
+        const job_bucket = s3.Bucket.fromBucketName(this, 'job-bucket',
+                                                   props.s3_configs.job_bucket);
+        const out_bucket = s3.Bucket.fromBucketName(this, 'out-bucket',
+                                                    props.s3_configs.out_bucket);
+
         const network_stack = new NetworkStack(this, 'network', props);
         const batch_stack = new BatchStack(this, 'batch', {
                 ... props,
             vpc: network_stack.vpc,
+            s3_configs: {
+                    ... props.s3_configs,
+                in_bucket,
+                job_bucket,
+                out_bucket,
+            }
         });
 
         const dead_letter_queue = new sqs.Queue(this, 'dead-letter-queue', {
